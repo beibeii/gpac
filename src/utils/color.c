@@ -1704,18 +1704,7 @@ GF_Err gf_color_write_yuv422_10_to_yuv422(GF_VideoSurface *vs_dst,  unsigned cha
 			src_v++;
 		}
 	}
-	/*for (i=0; i<h; i++) {
-		u16 *src_v = (u16 *) (pV + i*src_stride/2);
-		u8 *dst_v = (u8 *) vs_dst->video_buffer + 3*vs_dst->pitch_y * vs_dst->height/2  + i*vs_dst->pitch_y/2;
-		if (vs_dst->v_ptr) dst_v = (u8 *) (vs_dst->v_ptr + i*vs_dst->pitch_y/2);
-
-		for (j=0; j<w/2; j++) {
-			*dst_v = (*src_v) >> 2;
-			dst_v++;
-			src_v++;
-		}
-	}*/
-
+	
 
 	return GF_OK;
 }

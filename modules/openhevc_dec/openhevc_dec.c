@@ -512,7 +512,7 @@ static GF_Err HEVC_flush_picture(HEVCDec *ctx, char *outBuffer, u32 *outBufferLe
 			*outBufferLength = ctx->out_size;
 
 			if (ctx->direct_output )
-			 ctx->has_pic = GF_TRUE;
+			 	ctx->has_pic = GF_TRUE;
 		}
 		return GF_OK;
 	}

@@ -457,11 +457,11 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
 		break;
 #endif
 	case GF_PIXEL_YV12:
-    case GF_PIXEL_YV12_10:
+        case GF_PIXEL_YV12_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
 	case GF_PIXEL_YUV444:		
-    case GF_PIXEL_YUV444_10:
+        case GF_PIXEL_YUV444_10:
 	case GF_PIXEL_NV21:
 #ifndef GPAC_USE_GLES1X
 		if (compositor->gl_caps.has_shaders && (is_pow2 || compositor->visual->compositor->shader_only_mode) ) {
@@ -750,7 +750,7 @@ common:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
 	case GF_PIXEL_YUV444:		
-    case GF_PIXEL_YUV444_10:
+        case GF_PIXEL_YUV444_10:
 	case GF_PIXEL_NV21:
 	case GF_PIXEL_I420:
 		if (txh->tx_io->gl_format == compositor->gl_caps.yuv_texture) {
@@ -811,7 +811,7 @@ common:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
 	case GF_PIXEL_YUV444:		
-    case GF_PIXEL_YUV444_10:
+        case GF_PIXEL_YUV444_10:
 	case GF_PIXEL_NV21:
 	case GF_PIXEL_I420:
 	case GF_PIXEL_BGR_24:
