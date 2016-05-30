@@ -27,6 +27,7 @@
 #include <gpac/download.h>
 #include <gpac/internal/m3u8.h>
 #include <gpac/network.h>
+#include <gpac/maths.h>
 
 #ifdef _WIN32_WCE
 #include <winbase.h>
@@ -316,6 +317,7 @@ static GF_MPD_SegmentTimeline *gf_mpd_parse_segment_timeline(GF_MPD *mpd, GF_XML
 		if (!strcmp(child->name, "S")) {
 			GF_MPD_SegmentTimelineEntry *seg_tl_ent;
 			GF_SAFEALLOC(seg_tl_ent, GF_MPD_SegmentTimelineEntry);
+			if (!seg_tl_ent) continue;
 			gf_list_add(seg->entries, seg_tl_ent);
 
 			j = 0;
@@ -469,6 +471,8 @@ static GF_Err gf_mpd_parse_descriptor(GF_List *container, GF_XMLNode *root)
 	u32 i = 0;
 
 	GF_SAFEALLOC(mpd_desc, GF_MPD_Descriptor);
+	if (!mpd_desc) return GF_OUT_OF_MEM;
+	
 	while ( (att = gf_list_enum(root->attributes, &i)) ) {
 		if (!strcmp(att->name, "schemeIdUri")) mpd_desc->scheme_id_uri = gf_mpd_parse_string(att->value);
 		else if (!strcmp(att->name, "value")) mpd_desc->value = gf_mpd_parse_string(att->value);
@@ -1317,11 +1321,17 @@ static GF_Err gf_m3u8_fill_mpd_struct(MasterPlaylist *pl, const char *m3u8_file,
 					if (e==GF_OK) {
 						import.in_name = tmp_file;
 						e = gf_media_import(&import);
+						if (e) {
+							GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[MPD] Fail to import %s: %s\n", tmp_file, gf_error_to_string((e) )));
+						}
 					}
 				}
 			} else {
 				import.in_name = elt->url;
 				e = gf_media_import(&import);
+				if (e) {
+					GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[MPD] Fail to import %s: %s\n", elt->url, gf_error_to_string((e) )));
+				}
 			}
 
 			if (import.nb_tracks > 1) {
@@ -1466,7 +1476,7 @@ try_next_segment:
 						break;
 					case GF_ISOM_MEDIA_AUDIO:
 						samplerate = import.tk_info[k].audio_info.sample_rate;
-						num_channels = import.tk_info[k].audio_info.nb_channels;
+						/*num_channels = import.tk_info[k].audio_info.nb_channels;*/
 						break;
 					}
 				}
@@ -1556,7 +1566,7 @@ try_next_segment:
 			}
 			rep->segment_list->segment_URLs = gf_list_new();
 			rep->segment_list->duration = (u64) (pe->duration_info * 1000);
-			update_interval = (count_elements - 1) * pe->duration_info * 1000;
+//			update_interval = (count_elements - 1) * pe->duration_info * 1000;
 			for (k=0; k<count_elements; k++) {
 				GF_MPD_SegmentURL *segment_url;
 				elt = gf_list_get(pe->element.playlist.elements, k);
@@ -1683,11 +1693,16 @@ GF_Err gf_m3u8_to_mpd(const char *m3u8_file, const char *base_url,
 						e = gf_m3u8_parse_sub_playlist("tmp.m3u8", &pl, suburl, stream, pe);
 					} else {
 						GF_LOG(GF_LOG_WARNING, GF_LOG_DASH, ("[MPD Generator] Download faile for %s\n", suburl));
+						e = GF_OK;
 					}
 					gf_delete_file("tmp.m3u8");
 				} else {
 					e = gf_m3u8_parse_sub_playlist(suburl, &pl, suburl, stream, pe);
 				}
+				if (e) {
+					GF_LOG(GF_LOG_WARNING, GF_LOG_DASH, ("[M3U8toMPD] Failed to parse subplaylist %s\n", suburl));
+				}
+				
 			}
 			gf_free(suburl);
 		}
@@ -1702,7 +1717,6 @@ GF_Err gf_m3u8_to_mpd(const char *m3u8_file, const char *base_url,
 		return GF_BAD_PARAM;
 	}
 
-	update_interval = 0;
 	/*update interval is set to the duration of the last media file with rules defined in http live streaming RFC section 6.3.4*/
 	switch (reload_count) {
 	case 0:
@@ -1747,7 +1761,7 @@ GF_Err gf_m3u8_solve_representation_xlink(GF_MPD_Representation *rep, GF_FileDow
 	PlaylistElement *pe;
 	u32 k, count_elements;
 
-	if (!getter && !getter->new_session && !getter->del_session && !getter->get_cache_name) {
+	if (!getter || !getter->new_session || !getter->del_session || !getter->get_cache_name) {
 		GF_LOG(GF_LOG_WARNING, GF_LOG_DASH, ("[DASH] FileDownloader not found\n"));
 		return GF_BAD_PARAM;
 	}
@@ -1789,6 +1803,7 @@ GF_Err gf_m3u8_solve_representation_xlink(GF_MPD_Representation *rep, GF_FileDow
 	for (k=0; k<count_elements; k++) {
 		GF_MPD_SegmentURL *segment_url;
 		PlaylistElement *elt = gf_list_get(pe->element.playlist.elements, k);
+		if (!elt) continue;
 
 		//NOTE: for GPAC now, we disable stream AAC to avoid the problem when switching quality. It should be improved later !
 		if (elt && strstr(elt->url, ".aac")) {
@@ -2327,9 +2342,55 @@ GF_Err gf_mpd_write_file(GF_MPD const * const mpd, const char *file_name)
 }
 
 GF_EXPORT
-GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_AdaptationSet *set, GF_MPD_Period *period, const char *mpd_url, GF_MPD_URLResolveType resolve_type, u32 item_index, u32 nb_segments_removed, char **out_url, u64 *out_range_start, u64 *out_range_end, u64 *segment_duration_in_ms, Bool *is_in_base_url, char **out_key_url, bin128 *out_key_iv)
+u32 gf_mpd_get_base_url_count(GF_MPD *mpd, GF_MPD_Period *period, GF_MPD_AdaptationSet *set, GF_MPD_Representation *rep)
+{
+	u32 base_url_count, i;
+	base_url_count = 1;
+	i = gf_list_count(mpd->base_URLs);
+	if (i>1) base_url_count *= i;
+	i = gf_list_count(period->base_URLs);
+	if (i>1) base_url_count *= i;
+	i = gf_list_count(set->base_URLs);
+	if (i>1) base_url_count *= i;
+	i = gf_list_count(rep->base_URLs);
+	if (i>1) base_url_count *= i;
+
+	return base_url_count;
+}
+
+static char *gf_mpd_get_base_url(GF_List *baseURLs, char *url, u32 *base_url_index)
 {
 	GF_MPD_BaseURL *url_child;
+	u32 idx = 0;
+	u32 nb_base = gf_list_count(baseURLs);
+	if (nb_base>1) {
+		u32 nb_bits = gf_get_bit_size(nb_base-1);
+		u32 mask=0;
+		u32 i=0;
+		while (1) {
+			mask |= 1;
+			i++;
+			if (i>=nb_bits) break;
+			mask <<= 1;
+		}
+		idx = (*base_url_index) & mask;
+		(*base_url_index) = (*base_url_index) >> nb_bits;
+	} else {
+		idx = 0;
+	}
+	
+	url_child = gf_list_get(baseURLs, idx);
+	if (url_child) {
+		char *t_url = gf_url_concatenate(url, url_child->URL);
+		gf_free(url);
+		url = t_url;
+	}
+	return url;
+}
+
+GF_EXPORT
+GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_AdaptationSet *set, GF_MPD_Period *period, const char *mpd_url, u32 base_url_index, GF_MPD_URLResolveType resolve_type, u32 item_index, u32 nb_segments_removed, char **out_url, u64 *out_range_start, u64 *out_range_end, u64 *segment_duration_in_ms, Bool *is_in_base_url, char **out_key_url, bin128 *out_key_iv)
+{
 	GF_MPD_SegmentTimeline *timeline = NULL;
 	u32 start_number = 1;
 	u32 timescale=0;
@@ -2345,33 +2406,11 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 	/*resolve base URLs from document base (download location) to representation (media)*/
 	url = gf_strdup(mpd_url);
 
-	url_child = gf_list_get(mpd->base_URLs, 0);
-	if (url_child) {
-		char *t_url = gf_url_concatenate(url, url_child->URL);
-		gf_free(url);
-		url = t_url;
-	}
-
-	url_child = gf_list_get(period->base_URLs, 0);
-	if (url_child) {
-		char *t_url = gf_url_concatenate(url, url_child->URL);
-		gf_free(url);
-		url = t_url;
-	}
-
-	url_child = gf_list_get(set->base_URLs, 0);
-	if (url_child) {
-		char *t_url = gf_url_concatenate(url, url_child->URL);
-		gf_free(url);
-		url = t_url;
-	}
-
-	url_child = gf_list_get(rep->base_URLs, 0);
-	if (url_child) {
-		char *t_url = gf_url_concatenate(url, url_child->URL);
-		gf_free(url);
-		url = t_url;
-	}
+	url = gf_mpd_get_base_url(mpd->base_URLs, url, &base_url_index);
+	url = gf_mpd_get_base_url(period->base_URLs, url, &base_url_index);
+	url = gf_mpd_get_base_url(set->base_URLs, url, &base_url_index);
+	url = gf_mpd_get_base_url(rep->base_URLs, url, &base_url_index);
+	assert(url);
 
 	/*single URL*/
 	if (!rep->segment_list && !set->segment_list && !period->segment_list && !rep->segment_template && !set->segment_template && !period->segment_template) {
@@ -2382,7 +2421,8 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 		switch (resolve_type) {
 		case GF_MPD_RESOLVE_URL_MEDIA:
 		case GF_MPD_RESOLVE_URL_MEDIA_TEMPLATE:
-			if (!url) return GF_NON_COMPLIANT_BITSTREAM;
+			if (!url)
+				return GF_NON_COMPLIANT_BITSTREAM;
 			*out_url = url;
 			return GF_OK;
 		case GF_MPD_RESOLVE_URL_INIT:
@@ -2439,26 +2479,17 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 		/*apply inheritance of attributes, lowest level having preceedence*/
 		if (period->segment_list) {
 			if (period->segment_list->initialization_segment) init_url = period->segment_list->initialization_segment;
-			if (period->segment_list->representation_index) index_url = period->segment_list->representation_index;
 			if (period->segment_list->segment_URLs) segments = period->segment_list->segment_URLs;
-			if (period->segment_list->start_number != (u32) -1) start_number = period->segment_list->start_number;
-			if (period->segment_list->segment_timeline) timeline = period->segment_list->segment_timeline;
 			if (!timescale && period->segment_list->timescale) timescale = period->segment_list->timescale;
 		}
 		if (set->segment_list) {
 			if (set->segment_list->initialization_segment) init_url = set->segment_list->initialization_segment;
-			if (set->segment_list->representation_index) index_url = set->segment_list->representation_index;
 			if (set->segment_list->segment_URLs) segments = set->segment_list->segment_URLs;
-			if (set->segment_list->start_number != (u32) -1) start_number = set->segment_list->start_number;
-			if (set->segment_list->segment_timeline) timeline = set->segment_list->segment_timeline;
 			if (!timescale && set->segment_list->timescale) timescale = set->segment_list->timescale;
 		}
 		if (rep->segment_list) {
 			if (rep->segment_list->initialization_segment) init_url = rep->segment_list->initialization_segment;
-			if (rep->segment_list->representation_index) index_url = rep->segment_list->representation_index;
 			if (rep->segment_list->segment_URLs) segments = rep->segment_list->segment_URLs;
-			if (rep->segment_list->start_number != (u32) -1) start_number = rep->segment_list->start_number;
-			if (rep->segment_list->segment_timeline) timeline = rep->segment_list->segment_timeline;
 			if (!timescale && rep->segment_list->timescale) timescale = rep->segment_list->timescale;
 		}
 
@@ -2605,6 +2636,8 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 	}
 	/*let's solve the template*/
 	solved_template = gf_malloc(sizeof(char)*(strlen(url_to_solve) + (rep->id ? strlen(rep->id) : 0)) * 2);
+	if (!solved_template) return GF_OUT_OF_MEM;
+	
 	solved_template[0] = 0;
 	strcpy(solved_template, url_to_solve);
 	first_sep = strchr(solved_template, '$');
@@ -2637,7 +2670,15 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 			strcat(solved_template, "$");
 		}
 		else if (!strcmp(first_sep+1, "RepresentationID")) {
-			strcat(solved_template, rep->id);
+			if (rep->id) {
+				strcat(solved_template, rep->id);
+			} else {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[DASH] Missing ID on representation - cannot solve template\n\n"));
+				gf_free(url);
+				gf_free(solved_template);
+				second_sep[0] = '$';
+				return GF_NON_COMPLIANT_BITSTREAM;
+			}
 		}
 		else if (!strcmp(first_sep+1, "Number")) {
 			if (resolve_type==GF_MPD_RESOLVE_URL_MEDIA_TEMPLATE) {
@@ -2647,11 +2688,12 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 				strcat(solved_template, szFormat);
 			}
 
-			/*check total duration*/
+			/*check start time is in period (start time is ~seg_duration * item_index, since startNumber seg has start time = 0 in the period*/
 			if (period->duration
-				&& ((start_number + item_index) * *segment_duration_in_ms > period->duration)) {
+				&& (item_index * (*segment_duration_in_ms) > period->duration)) {
 				gf_free(url);
 				gf_free(solved_template);
+				second_sep[0] = '$';
 				return GF_EOS;
 			}
 		}
@@ -2685,6 +2727,7 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 						} else {
 							gf_free(url);
 							gf_free(solved_template);
+							second_sep[0] = '$';
 							return GF_EOS;
 						}
 					}
@@ -2708,6 +2751,7 @@ GF_Err gf_mpd_resolve_url(GF_MPD *mpd, GF_MPD_Representation *rep, GF_MPD_Adapta
 			*out_url = NULL;
 			gf_free(url);
 			gf_free(solved_template);
+			second_sep[0] = '$';
 			return GF_NON_COMPLIANT_BITSTREAM;
 		}
 		if (format_tag) format_tag[0] = '%';
@@ -2764,9 +2808,10 @@ void gf_mpd_resolve_segment_duration(GF_MPD_Representation *rep, GF_MPD_Adaptati
 		if (rep->segment_base && rep->segment_base->timescale) timescale = rep->segment_base->timescale;
 		if (!pts_offset && set->segment_base && set->segment_base->presentation_time_offset) pts_offset = set->segment_base->presentation_time_offset;
 		if (!timescale && set->segment_base && set->segment_base->timescale) timescale = set->segment_base->timescale;
-		if (!pts_offset && period->segment_base && period->segment_base->presentation_time_offset) pts_offset = period->segment_base->presentation_time_offset;
-		if (!timescale && period->segment_base && period->segment_base->timescale) timescale = period->segment_base->timescale;
-
+		if (period) {
+			if (!pts_offset && period->segment_base && period->segment_base->presentation_time_offset) pts_offset = period->segment_base->presentation_time_offset;
+			if (!timescale && period->segment_base && period->segment_base->timescale) timescale = period->segment_base->timescale;
+		}
 		if (out_pts_offset) *out_pts_offset = pts_offset;
 		*out_timescale = timescale ? timescale : 1;
 		return;

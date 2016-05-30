@@ -34,7 +34,6 @@
 #include "texturing.h"
 
 
-
 #define CHECK_FIELD(__name, __index, __type) \
 	if (gf_node_get_field(node, __index, &field) != GF_OK) {\
 		GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[HardcodedProtos] Cannot get field index %d\n", __index));\
@@ -44,7 +43,6 @@
 		GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[HardcodedProtos] %s field idx %d (%s) is not of type %s\n", __name, field.fieldIndex, field.name, gf_sg_vrml_get_field_type_by_name(__type) ));\
 		return GF_FALSE;\
 	}
-
 
 
 #ifndef GPAC_DISABLE_VRML
@@ -406,7 +404,7 @@ static Bool PlaneClipper_GetNode(GF_Node *node, PlaneClipper *pc)
 	CHECK_FIELD("PlaneClipper", 1, GF_SG_VRML_SFFLOAT);
 	pc->plane.d = * (SFFloat *) field.far_ptr;
 	
-	CHECK_FIELD("PlaneClipper", 2, GF_SG_VRML_MFNODE) return GF_FALSE;
+	CHECK_FIELD("PlaneClipper", 2, GF_SG_VRML_MFNODE);
 	pc->children = *(GF_ChildNodeItem **) field.far_ptr;
 	return GF_TRUE;
 }
@@ -458,6 +456,10 @@ void compositor_init_plane_clipper(GF_Compositor *compositor, GF_Node *node)
 	if (PlaneClipper_GetNode(node, &pc)) {
 		PlaneClipperStack *stack;
 		GF_SAFEALLOC(stack, PlaneClipperStack);
+		if (!stack) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to allocate plane clipper stack\n"));
+			return;
+		}
 		//SetupGroupingNode(stack, compositor->compositor, node, & pc.children);
 		gf_node_set_private(node, stack);
 		gf_node_set_callback_function(node, TraversePlaneClipper);
@@ -580,7 +582,7 @@ static void TraverseOffscreenGroup(GF_Node *node, void *rs, Bool is_destroy)
 		if (tr_state->traversing_mode == TRAVERSE_GET_BOUNDS) {
 			tr_state->bounds = stack->bounds;
 		}
-		else if (tr_state->traversing_mode == TRAVERSE_PICK) {
+		else if (stack->cache && (tr_state->traversing_mode == TRAVERSE_PICK)) {
 			vrml_drawable_pick(stack->cache->drawable, tr_state);
 		}
 	}
@@ -592,6 +594,10 @@ void compositor_init_offscreen_group(GF_Compositor *compositor, GF_Node *node)
 	if (OffscreenGroup_GetNode(node, &og)) {
 		OffscreenGroupStack *stack;
 		GF_SAFEALLOC(stack, OffscreenGroupStack);
+		if (!stack) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to allocate offscreen group stack\n"));
+			return;
+		}
 		gf_node_set_private(node, stack);
 		gf_node_set_callback_function(node, TraverseOffscreenGroup);
 		stack->og = og;
@@ -704,6 +710,10 @@ void compositor_init_depth_group(GF_Compositor *compositor, GF_Node *node)
 	if (DepthGroup_GetNode(node, &dg)) {
 		DepthGroupStack *stack;
 		GF_SAFEALLOC(stack, DepthGroupStack);
+		if (!stack) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to allocate depth group stack\n"));
+			return;
+		}
 		gf_node_set_private(node, stack);
 		gf_node_set_callback_function(node, TraverseDepthGroup);
 		stack->dg = dg;
@@ -967,6 +977,10 @@ void compositor_init_untransform(GF_Compositor *compositor, GF_Node *node)
 	if (Untransform_GetNode(node, &tr)) {
 		UntransformStack *stack;
 		GF_SAFEALLOC(stack, UntransformStack);
+		if (!stack) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to allocate untransform stack\n"));
+			return;
+		}
 		gf_node_set_private(node, stack);
 		gf_node_set_callback_function(node, TraverseUntransform);
 		stack->untr = tr;
@@ -1045,6 +1059,10 @@ void compositor_init_style_group(GF_Compositor *compositor, GF_Node *node)
 	if (StyleGroup_GetNode(node, &sg)) {
 		StyleGroupStack *stack;
 		GF_SAFEALLOC(stack, StyleGroupStack);
+		if (!stack) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to allocate style group stack\n"));
+			return;
+		}
 		gf_node_set_private(node, stack);
 		gf_node_set_callback_function(node, TraverseStyleGroup);
 		stack->sg = sg;
@@ -1084,7 +1102,7 @@ static Bool TestSensor_GetNode(GF_Node *node, TestSensor *ts)
 	if (field.eventType != GF_SG_EVENT_EXPOSED_FIELD) return GF_FALSE;
 	ts->value = *(SFFloat *)field.far_ptr;
 
-	CHECK_FIELD("TestSensor", 2, GF_SG_VRML_SFFLOAT) return GF_FALSE;
+	CHECK_FIELD("TestSensor", 2, GF_SG_VRML_SFFLOAT);
 	if (field.eventType != GF_SG_EVENT_OUT) return GF_FALSE;
 
 	return GF_TRUE;
@@ -1126,6 +1144,10 @@ void compositor_init_test_sensor(GF_Compositor *compositor, GF_Node *node)
 		GF_Err e;
 		TestSensorStack *stack;
 		GF_SAFEALLOC(stack, TestSensorStack);
+		if (!stack) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to allocate test sensor stack\n"));
+			return;
+		}
 		gf_node_set_private(node, stack);
 		gf_node_set_callback_function(node, TraverseTestSensor);
 		stack->ts = ts;
@@ -1161,7 +1183,8 @@ static Bool CustomTexture_GetNode(GF_Node *node, CustomTexture *tx)
     memset(tx, 0, sizeof(CustomTexture));
     tx->sgprivate = node->sgprivate;
     
-	CHECK_FIELD("CustomTexture", 0, GF_SG_VRML_SFFLOAT) return GF_FALSE;
+    CHECK_FIELD("CustomTexture", 0, GF_SG_VRML_SFFLOAT);
+	if (field.eventType != GF_SG_EVENT_EXPOSED_FIELD) return GF_FALSE;
     tx->intensity = *(SFFloat *)field.far_ptr;
     
     return GF_TRUE;
@@ -1241,6 +1264,10 @@ void compositor_init_custom_texture(GF_Compositor *compositor, GF_Node *node)
     if (CustomTexture_GetNode(node, &tx)) {
         CustomTextureStack *stack;
         GF_SAFEALLOC(stack, CustomTextureStack);
+		if (!stack) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to allocate custom texture group stack\n"));
+			return;
+		}
         gf_node_set_private(node, stack);
         gf_node_set_callback_function(node, TraverseCustomTexture);
         stack->tx = tx;

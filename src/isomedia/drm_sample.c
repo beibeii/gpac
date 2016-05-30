@@ -418,8 +418,8 @@ static GF_Err isom_set_protected_entry(GF_ISOFile *the_file, u32 trackNumber, u3
 	case GF_ISOM_BOX_TYPE_HEV1:
 	case GF_ISOM_BOX_TYPE_HVC2:
 	case GF_ISOM_BOX_TYPE_HEV2:
-	case GF_ISOM_BOX_TYPE_SHC1:
-	case GF_ISOM_BOX_TYPE_SHV1:
+	case GF_ISOM_BOX_TYPE_LHVC:
+	case GF_ISOM_BOX_TYPE_LHV1:
 	case GF_ISOM_BOX_TYPE_HVT1:
 		if (is_isma)
 			original_format = GF_4CC('2','6','5','b');
@@ -1206,6 +1206,7 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *the_file, u32 trackNumber, u
 		return GF_NOT_SUPPORTED;
 
 	GF_SAFEALLOC( (*sai),  GF_CENCSampleAuxInfo);
+	if (! (*sai) ) return GF_OUT_OF_MEM;
 	if (a_box) {
 		memmove((*sai)->IV, a_sai->IV, 16);
 		(*sai)->subsample_count = a_sai->subsample_count;

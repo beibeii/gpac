@@ -456,6 +456,8 @@ static GF_Err MPD_LoadMediaService(GF_MPD_In *mpdin, u32 group_index, const char
 			if (segment_ifce) {
 				GF_MPDGroup *group;
 				GF_SAFEALLOC(group, GF_MPDGroup);
+				if (!group) return GF_OUT_OF_MEM;
+				
 				group->segment_ifce = segment_ifce;
 				group->segment_ifce->proxy_udta = mpdin;
 				group->segment_ifce->query_proxy = MPD_ClientQuery;
@@ -474,6 +476,7 @@ static GF_Err MPD_LoadMediaService(GF_MPD_In *mpdin, u32 group_index, const char
 			if (ifce->CanHandleURL && ifce->CanHandleURL(ifce, init_segment_name)) {
 				GF_MPDGroup *group;
 				GF_SAFEALLOC(group, GF_MPDGroup);
+				if (!group) return GF_OUT_OF_MEM;
 				group->segment_ifce = ifce;
 				group->segment_ifce->proxy_udta = mpdin;
 				group->segment_ifce->query_proxy = MPD_ClientQuery;
@@ -988,8 +991,6 @@ GF_Err MPD_ConnectService(GF_InputService *plug, GF_ClientService *serv, const c
 	else if (!strcmp(opt, "bandwidth")) mpdin->buffer_adaptation = GF_FALSE;
 	else mpdin->buffer_adaptation = GF_TRUE;
 
-
-	first_select_mode = 0;
 	opt = gf_modules_get_option((GF_BaseInterface *)plug, "DASH", "StartRepresentation");
 	if (!opt) {
 		gf_modules_set_option((GF_BaseInterface *)plug, "DASH", "StartRepresentation", "minBandwidth");
@@ -1057,8 +1058,6 @@ GF_Err MPD_ConnectService(GF_InputService *plug, GF_ClientService *serv, const c
 	if (!opt) gf_modules_set_option((GF_BaseInterface *)plug, "DASH", "InitialTimeshift", "0");
 	if (opt) init_timeshift = atoi(opt);
 
-
-	tile_adapt_mode = 0;
 	opt = gf_modules_get_option((GF_BaseInterface *)plug, "DASH", "TileAdaptation");
 	if (!opt) {
 		gf_modules_set_option((GF_BaseInterface *)plug, "DASH", "TileAdaptation", "none");
@@ -1260,8 +1259,24 @@ GF_Err MPD_ServiceCommand(GF_InputService *plug, GF_NetworkCommand *com)
 
 	case GF_NET_SERVICE_QUALITY_SWITCH:
 		if (com->switch_quality.set_tile_mode_plus_one) {
+			GF_BaseInterface *pl = (GF_BaseInterface *)plug;
 			GF_DASHTileAdaptationMode tile_mode = com->switch_quality.set_tile_mode_plus_one - 1;
 			gf_dash_set_tile_adaptation_mode(mpdin->dash, tile_mode, 100);
+			
+			switch (tile_mode) {
+			case GF_DASH_ADAPT_TILE_ROWS: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "rows"); break;
+			case GF_DASH_ADAPT_TILE_ROWS_REVERSE: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "reverseRows"); break;
+			case GF_DASH_ADAPT_TILE_ROWS_MIDDLE: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "middleRows"); break;
+			case GF_DASH_ADAPT_TILE_COLUMNS: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "columns"); break;
+			case GF_DASH_ADAPT_TILE_COLUMNS_REVERSE: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "reverseColumns"); break;
+			case GF_DASH_ADAPT_TILE_COLUMNS_MIDDLE: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "middleColumns"); break;
+			case GF_DASH_ADAPT_TILE_CENTER: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "center"); break;
+			case GF_DASH_ADAPT_TILE_EDGES: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "edges"); break;
+			case GF_DASH_ADAPT_TILE_NONE:
+			default:
+				gf_modules_set_option(pl,  "DASH", "TileAdaptation", "none");
+				break;
+			}
 		} else if (com->switch_quality.set_auto) {
 			gf_dash_set_automatic_switching(mpdin->dash, 1);
 		} else if (com->base.on_channel) {
@@ -1313,6 +1328,12 @@ GF_Err MPD_ServiceCommand(GF_InputService *plug, GF_NetworkCommand *com)
 		Bool res;
 		idx = MPD_GetGroupIndexForChannel(mpdin, com->base.on_channel);
 		if (idx < 0) return GF_BAD_PARAM;
+		if (com->srd.dependent_group_index) {
+			if (com->srd.dependent_group_index > gf_dash_group_get_num_groups_depending_on(mpdin->dash, idx))
+				return GF_BAD_PARAM;
+			
+			idx = gf_dash_get_dependent_group_index(mpdin->dash, idx, com->srd.dependent_group_index-1);
+		}		
 		res = gf_dash_group_get_srd_info(mpdin->dash, idx, NULL, &com->srd.x, &com->srd.y, &com->srd.w, &com->srd.h, &com->srd.width, &com->srd.height);
 		return res ? GF_OK : GF_NOT_SUPPORTED;
 	}
@@ -1568,7 +1589,17 @@ GF_BaseInterface *LoadInterface(u32 InterfaceType)
 	if (InterfaceType != GF_NET_CLIENT_INTERFACE) return NULL;
 
 	GF_SAFEALLOC(plug, GF_InputService);
+	if (!plug) return NULL;
 	GF_REGISTER_MODULE_INTERFACE(plug, GF_NET_CLIENT_INTERFACE, "GPAC MPD Loader", "gpac distribution")
+	
+	GF_SAFEALLOC(mpdin, GF_MPD_In);
+	if (!mpdin) {
+		gf_free(plug);
+		return NULL;
+	}
+	plug->priv = mpdin;
+	mpdin->plug = plug;
+	
 	plug->RegisterMimeTypes = MPD_RegisterMimeTypes;
 	plug->CanHandleURL = MPD_CanHandleURL;
 	plug->ConnectService = MPD_ConnectService;
@@ -1580,9 +1611,7 @@ GF_BaseInterface *LoadInterface(u32 InterfaceType)
 	plug->CanHandleURLInService = MPD_CanHandleURLInService;
 	plug->ChannelGetSLP = MPD_ChannelGetSLP;
 	plug->ChannelReleaseSLP = MPD_ChannelReleaseSLP;
-	GF_SAFEALLOC(mpdin, GF_MPD_In);
-	plug->priv = mpdin;
-	mpdin->plug = plug;
+
 	return (GF_BaseInterface *)plug;
 }
 

@@ -411,11 +411,13 @@ void PrintFormats()
 	        " MPEG-4 Video         .cmp .m4v\n"
 	        " H263 Video           .263 .h263\n"
 	        " AVC/H264 Video       .h264 .h26L .264 .26L .x264 .svc\n"
-	        " HEVC Video          .hevc .h265 .265 .hvc .shvc\n"
+	        " HEVC Video           .hevc .h265 .265 .hvc .shvc\n"
 	        " JPEG Images          .jpg .jpeg\n"
+	        " JPEG-2000 Images     .jp2\n"
 	        " PNG Images           .png\n"
-	        " MPEG 1-2 Audio       .mp3, .m1a, .m2a\n"
+	        " MPEG 1-2 Audio       .mp3, .mp2, .m1a, .m2a\n"
 	        " ADTS-AAC Audio       .aac\n"
+	        " Dolby (e)AC-3 Audio  .ac3 .ec3\n"
 	        " AMR(WB) Audio        .amr .awb\n"
 	        " EVRC Audio           .evc\n"
 	        " SMV Audio            .smv\n"
@@ -431,16 +433,23 @@ void PrintFormats()
 	        "Supported text formats:\n"
 	        " SRT Subtitles        .srt\n"
 	        " SUB Subtitles        .sub\n"
+	        " VobSub               .idx\n"
 	        " GPAC Timed Text      .ttxt\n"
+	        " VTT                  .vtt\n"
+	        " TTML                 .ttml\n"
 	        " QuickTime TeXML Text .xml  (cf QT documentation)\n"
 	        "\n"
 	        "Supported Scene formats:\n"
 	        " MPEG-4 XMT-A         .xmt .xmta .xmt.gz .xmta.gz\n"
 	        " MPEG-4 BT            .bt .bt.gz\n"
+	        " MPEG-4 SAF           .saf .lsr\n"
 	        " VRML                 .wrl .wrl.gz\n"
 	        " X3D-XML              .x3d .x3d.gz\n"
 	        " X3D-VRML             .x3dv .x3dv.gz\n"
 	        " MacroMedia Flash     .swf (very limited import support only)\n"
+	        "\n"
+	        "Supported chapter formats:\n"
+	        " Nero chapters        .txt .chap\n"
 	        "\n"
 	       );
 }
@@ -1291,7 +1300,9 @@ static Bool parse_meta_args(MetaAction *meta, MetaActionType act_type, char *opt
 			if (!meta->image_props) {
 				GF_SAFEALLOC(meta->image_props, GF_ImageItemProperties);
 			}
-			meta->image_props->angle = atoi(szSlot+11);
+			if (meta->image_props) {
+				meta->image_props->angle = atoi(szSlot+11);
+			}
 			ret = 1;
 		}
 		else if (!strnicmp(szSlot, "dref", 4)) {
@@ -1359,7 +1370,7 @@ static Bool parse_tsel_args(TSELAction **__tsel_list, char *opts, u32 *nb_tsel_a
 	u32 nb_criteria = 0;
 	TSELAction *tsel_act;
 	char szSlot[1024], *next;
-	TSELAction *tsel_list = *__tsel_list;
+	TSELAction *tsel_list;
 
 	has_switch_id = 0;
 
@@ -1598,6 +1609,8 @@ GF_DashSegmenterInput *set_dash_input(GF_DashSegmenterInput *dash_inputs, char *
 static GF_Err parse_track_action_params(char *string, TrackAction *action)
 {
 	char *param = string;
+	if (!action || !string) return GF_BAD_PARAM;
+	
 	while (param) {
 		param = strchr(param, ':');
 		if (param) {
@@ -3862,6 +3875,12 @@ int mp4boxMain(int argc, char **argv)
 				return mp4box_cleanup(1);
 			}
 		}
+
+		if (segment_timeline && !use_url_template) {
+			fprintf(stderr, "DASH Warning: using -segment-timeline with no -url-template. Forcing URL template.\n");
+			use_url_template = GF_TRUE;
+		}
+		
 		e = gf_dasher_enable_url_template(dasher, (Bool) use_url_template, seg_name, seg_ext);
 		if (!e) e = gf_dasher_enable_segment_timeline(dasher, segment_timeline);
 		if (!e) e = gf_dasher_enable_single_segment(dasher, single_segment);

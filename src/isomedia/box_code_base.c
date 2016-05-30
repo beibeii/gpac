@@ -143,6 +143,7 @@ GF_Err chpl_Read(GF_Box *s,GF_BitStream *bs)
 	count = 0;
 	while (nb_chaps) {
 		GF_SAFEALLOC(ce, GF_ChapterEntry);
+		if (!ce) return GF_OUT_OF_MEM;
 		ce->start_time = gf_bs_read_u64(bs);
 		len = gf_bs_read_u8(bs);
 		if (len) {
@@ -892,6 +893,7 @@ GF_Err dinf_Size(GF_Box *s)
 	GF_Err e;
 	GF_DataInformationBox *ptr = (GF_DataInformationBox *)s;
 	e = gf_isom_box_get_size(s);
+	if (e) return e;
 	if (ptr->dref) {
 		e = gf_isom_box_size((GF_Box *) ptr->dref);
 		if (e) return e;
@@ -1837,7 +1839,7 @@ GF_Err hnti_Read(GF_Box *s, GF_BitStream *bs)
 			}
 			gf_bs_read_data(bs, rtp->sdpText, length);
 			rtp->sdpText[length] = 0;
-			sr += length;
+//			sr += length;
 			e = hnti_AddBox(ptr, (GF_Box *)rtp);
 			if (e) return e;
 			if (ptr->size<rtp->size) return GF_ISOM_INVALID_FILE;
@@ -2684,7 +2686,7 @@ GF_Err iods_Read(GF_Box *s, GF_BitStream *bs)
 	e = gf_odf_desc_read(desc, descSize, &ptr->descriptor);
 	//OK, free our desc
 	gf_free(desc);
-	return GF_OK;
+	return e;
 }
 
 GF_Box *iods_New()
@@ -3817,7 +3819,7 @@ GF_Err mp4v_AddBox(GF_Box *s, GF_Box *a)
 		if (ptr->svc_config) ERROR_ON_DUPLICATED_BOX(a, ptr)
 			ptr->svc_config = (GF_AVCConfigurationBox *)a;
 		break;
-	case GF_ISOM_BOX_TYPE_SHCC:
+	case GF_ISOM_BOX_TYPE_LHVC:
 		if (ptr->shvc_config) ERROR_ON_DUPLICATED_BOX(a, ptr)
 			ptr->shvc_config = (GF_HEVCConfigurationBox *)a;
 		break;
@@ -5230,8 +5232,8 @@ GF_Err stsd_AddBox(GF_SampleDescriptionBox *ptr, GF_Box *a)
 	case GF_ISOM_BOX_TYPE_HVC2:
 	case GF_ISOM_BOX_TYPE_HEV2:
 	case GF_ISOM_BOX_TYPE_HVT1:
-	case GF_ISOM_BOX_TYPE_SHC1:
-	case GF_ISOM_BOX_TYPE_SHV1:
+	case GF_ISOM_BOX_TYPE_LHV1:
+	case GF_ISOM_BOX_TYPE_LHE1:
 	case GF_ISOM_BOX_TYPE_TX3G:
 	case GF_ISOM_BOX_TYPE_TEXT:
 	case GF_ISOM_BOX_TYPE_ENCT:
@@ -6490,8 +6492,8 @@ static void gf_isom_check_sample_desc(GF_TrackBox *trak)
 		case GF_ISOM_BOX_TYPE_HVC2:
 		case GF_ISOM_BOX_TYPE_HEV2:
 		case GF_ISOM_BOX_TYPE_HVT1:
-		case GF_ISOM_BOX_TYPE_SHC1:
-		case GF_ISOM_BOX_TYPE_SHV1:
+		case GF_ISOM_BOX_TYPE_LHV1:
+		case GF_ISOM_BOX_TYPE_LHE1:
 		case GF_ISOM_BOX_TYPE_TX3G:
 		case GF_ISOM_BOX_TYPE_TEXT:
 		case GF_ISOM_BOX_TYPE_ENCT:
@@ -8797,6 +8799,7 @@ static void *sgpd_parse_entry(u32 grouping_type, GF_BitStream *bs, u32 entry_siz
 	{
 		GF_RollRecoveryEntry *ptr;
 		GF_SAFEALLOC(ptr, GF_RollRecoveryEntry);
+		if (!ptr) return NULL;
 		ptr->roll_distance = gf_bs_read_int(bs, 16);
 		*total_bytes = 2;
 		return ptr;
@@ -8805,6 +8808,7 @@ static void *sgpd_parse_entry(u32 grouping_type, GF_BitStream *bs, u32 entry_siz
 	{
 		GF_VisualRandomAccessEntry *ptr;
 		GF_SAFEALLOC(ptr, GF_VisualRandomAccessEntry);
+		if (!ptr) return NULL;
 		ptr->num_leading_samples_known = gf_bs_read_int(bs, 1);
 		ptr->num_leading_samples = gf_bs_read_int(bs, 7);
 		*total_bytes = 1;
@@ -8814,6 +8818,7 @@ static void *sgpd_parse_entry(u32 grouping_type, GF_BitStream *bs, u32 entry_siz
 	{
 		GF_CENCSampleEncryptionGroupEntry *ptr;
 		GF_SAFEALLOC(ptr, GF_CENCSampleEncryptionGroupEntry);
+		if (!ptr) return NULL;
 		ptr->IsEncrypted = gf_bs_read_u24(bs);
 		ptr->IV_size = gf_bs_read_u8(bs);
 		gf_bs_read_data(bs, (char *)ptr->KID, 16);
@@ -8824,7 +8829,7 @@ static void *sgpd_parse_entry(u32 grouping_type, GF_BitStream *bs, u32 entry_siz
 	{
 		u32 flags = gf_bs_peek_bits(bs, 24, 0);
 		flags &= 0x0000FF;
-		if (flags & 0x20) entry_size=9;
+		if (flags & 0x20) entry_size=7;
 		else entry_size=11;
 		//fallthrough
 	}
@@ -8833,6 +8838,7 @@ static void *sgpd_parse_entry(u32 grouping_type, GF_BitStream *bs, u32 entry_siz
 		GF_DefaultSampleGroupDescriptionEntry *ptr;
 		if (!entry_size) return NULL;
 		GF_SAFEALLOC(ptr, GF_DefaultSampleGroupDescriptionEntry);
+		if (!ptr) return NULL;
 		ptr->length = entry_size;
 		ptr->data = (u8 *) gf_malloc(sizeof(u8)*ptr->length);
 		gf_bs_read_data(bs, (char *) ptr->data, ptr->length);
@@ -8851,7 +8857,6 @@ static void	sgpd_del_entry(u32 grouping_type, void *entry)
 	case GF_4CC( 's', 'e', 'i', 'g' ):
 		gf_free(entry);
 		return;
-
 	default:
 	{
 		GF_DefaultSampleGroupDescriptionEntry *ptr = (GF_DefaultSampleGroupDescriptionEntry *)entry;
@@ -8876,7 +8881,7 @@ void sgpd_write_entry(u32 grouping_type, void *entry, GF_BitStream *bs)
 		gf_bs_write_u24(bs, ((GF_CENCSampleEncryptionGroupEntry *)entry)->IsEncrypted);
 		gf_bs_write_u8(bs, ((GF_CENCSampleEncryptionGroupEntry *)entry)->IV_size);
 		gf_bs_write_data(bs, (char *)((GF_CENCSampleEncryptionGroupEntry *)entry)->KID, 16);
-		return;
+		return; 
 	default:
 	{
 		GF_DefaultSampleGroupDescriptionEntry *ptr = (GF_DefaultSampleGroupDescriptionEntry *)entry;

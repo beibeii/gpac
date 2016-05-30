@@ -359,7 +359,7 @@ u32 gf_odf_desc_size(GF_Descriptor *desc)
 
 }
 
-//this is usefull to duplicate on the fly a descriptor (mainly for authoring purposes)
+//this is useful to duplicate on the fly a descriptor (mainly for authoring purposes)
 GF_EXPORT
 GF_Err gf_odf_desc_copy(GF_Descriptor *inDesc, GF_Descriptor **outDesc)
 {
@@ -453,7 +453,7 @@ GF_Err gf_odf_desc_add_desc(GF_Descriptor *parentDesc, GF_Descriptor *newDesc)
 /*****************************************************************************************
 		Since IPMP V2, we introduce a new set of functions to read / write a list of
 	descriptors that have no containers (a bit like an OD command, but for descriptors)
-		This is usefull for IPMPv2 DecoderSpecificInfo which contains a set of
+		This is useful for IPMPv2 DecoderSpecificInfo which contains a set of
 	IPMP_Declarators.
 		As it could be used for other purposes we keep it generic
 	You must create the list yourself, the functions just encode/decode from/to the list
@@ -600,8 +600,9 @@ GF_Err gf_odf_codec_apply_com(GF_ODCodec *codec, GF_ODCom *command)
 			}
 			if (!found) {
 				GF_ObjectDescriptor *od_new;
-				gf_odf_desc_copy((GF_Descriptor*)od, (GF_Descriptor**)&od_new);
-				gf_list_add(odU_o->objectDescriptors, od_new);
+				GF_Err e = gf_odf_desc_copy((GF_Descriptor*)od, (GF_Descriptor**)&od_new);
+				if (e==GF_OK)
+					gf_list_add(odU_o->objectDescriptors, od_new);
 			}
 
 		}

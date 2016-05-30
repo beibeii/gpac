@@ -985,9 +985,11 @@ GF_MediaObject *gf_scene_find_object(GF_Scene *scene, u16 ODID, char *url)
 	if (!url && !ODID) return NULL;
 	i=0;
 	while ((mo = (GF_MediaObject *)gf_list_enum(scene->scene_objects, &i))) {
-		if (ODID==GF_MEDIA_EXTERNAL_ID) {
+		if ((ODID==GF_MEDIA_EXTERNAL_ID) && url) {
 			if (mo->URLs.count && !stricmp(mo->URLs.vals[0].url, url)) return mo;
-		} else if (mo->OD_ID==ODID) return mo;
+		} else if (mo->OD_ID==ODID) {
+			return mo;
+		}
 	}
 	return NULL;
 }
@@ -1308,6 +1310,7 @@ void gf_scene_regenerate(GF_Scene *scene)
 
 	/*this is the first time, generate a scene graph*/
 	if (!ac) {
+		GF_Event evt;
 		scene->is_live360 = GF_FALSE;
 		if (strstr(scene->root_od->net_service->url, "#LIVE360TV")) {
 			scene->is_live360 = GF_TRUE;
@@ -1335,6 +1338,7 @@ void gf_scene_regenerate(GF_Scene *scene)
 			((M_NavigationInfo *)n2)->type.vals[0] = gf_strdup("VR");
 			gf_free( ((M_NavigationInfo *)n2)->type.vals[1] );
 			((M_NavigationInfo *)n2)->type.vals[1] = gf_strdup("NONE");
+			((M_NavigationInfo *)n2)->type.count = 2;
 			((M_NavigationInfo *)n2)->avatarSize.count = 0;
 
 			gf_node_list_add_child( &((GF_ParentNode *)n1)->children, n2);
@@ -1400,6 +1404,14 @@ void gf_scene_regenerate(GF_Scene *scene)
 			gf_node_list_add_child( &((GF_ParentNode *)addon_layer)->children, (GF_Node*)addon_scene);
 			gf_node_register((GF_Node *)addon_scene, (GF_Node *)addon_layer);
 		}
+		
+
+		//send activation for sensors
+		memset(&evt, 0, sizeof(GF_Event));
+		evt.type = GF_EVENT_SENSOR_REQUEST;
+		evt.activate_sensor.activate = scene->is_live360;
+		evt.activate_sensor.sensor_type = GF_EVENT_SENSOR_ORIENTATION;
+		gf_term_send_event(scene->root_od->term, &evt);
 	}
 
 
@@ -2477,6 +2489,10 @@ void gf_scene_register_associated_media(GF_Scene *scene, GF_AssociatedContentLoc
 
 	if (!addon) {
 		GF_SAFEALLOC(addon, GF_AddonMedia);
+		if (!addon) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[Terminal] Failed to allocate media addon\n"));
+			return;
+		}
 		addon->timeline_id = addon_info->timeline_id;
 		gf_list_add(scene->declared_addons, addon);
 		new_addon = 1;

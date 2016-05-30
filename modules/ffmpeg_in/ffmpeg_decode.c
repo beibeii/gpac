@@ -1120,7 +1120,7 @@ redecode:
 	        || ((ffd->out_pix_fmt==GF_PIXEL_YV12) && (ctx->pix_fmt != PIX_FMT_YUV420P) && !ffd->output_as_8bit )
 	        //need to realloc the conversion buffer
 	        || (ffd->conv_to_8bit && !ffd->conv_buffer && ffd->direct_output)
-			|| (out_pix_fmt != ffd->out_pix_fmt)
+		|| (out_pix_fmt != ffd->out_pix_fmt)
 		
 	   ) {
 
@@ -1619,6 +1619,15 @@ void *FFDEC_Load()
 	GF_MediaDecoder *ptr;
 	FFDec *priv;
 
+	GF_SAFEALLOC(ptr , GF_MediaDecoder);
+	if (!ptr) return NULL;
+	GF_SAFEALLOC(priv , FFDec);
+	if (!priv) {
+		gf_free(ptr);
+		return NULL;
+	}
+	ptr->privateStack = priv;
+
 	/* Note for valgrind : those two functions cause a leak in valgrind */
 	GF_LOG(GF_LOG_INFO, GF_LOG_CONTAINER, ("[FFMPEG Decoder] Registering all ffmpeg codecs...\n") );
 #ifdef FF_API_AVCODE_INIT /*commit ffmpeg 3211932c513338566b31d990d06957e15a644d13*/
@@ -1626,11 +1635,6 @@ void *FFDEC_Load()
 #endif
 	avcodec_register_all();
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_CONTAINER, ("[FFMPEG Decoder] Done registering all ffmpeg codecs.\n") );
-
-
-	GF_SAFEALLOC(ptr , GF_MediaDecoder);
-	GF_SAFEALLOC(priv , FFDec);
-	ptr->privateStack = priv;
 
 	ptr->AttachStream = FFDEC_AttachStream;
 	ptr->DetachStream = FFDEC_DetachStream;

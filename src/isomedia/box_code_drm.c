@@ -1141,6 +1141,8 @@ GF_Err piff_psec_Read(GF_Box *s, GF_BitStream *bs)
 	for (i=0; i<sample_count; ++i) {
 		GF_CENCSampleAuxInfo *sai;
 		GF_SAFEALLOC(sai, GF_CENCSampleAuxInfo);
+		if (!sai) return GF_OUT_OF_MEM;
+
 		sai->IV_size = ptr->IV_size;
 		gf_bs_read_data(bs, (char *) sai->IV, ptr->IV_size);
 		ptr->size -= ptr->IV_size;
@@ -1621,11 +1623,11 @@ GF_Err aprm_AddBox(GF_Box *s, GF_Box *a)
 {
 	GF_AdobeStdEncryptionParamsBox *ptr = (GF_AdobeStdEncryptionParamsBox *)s;
 	switch (a->type) {
-	case GF_ISOM_BOX_TYPE_AHDR:
+	case GF_ISOM_BOX_TYPE_AEIB:
 		if (ptr->enc_info) return GF_ISOM_INVALID_FILE;
 		ptr->enc_info = (GF_AdobeEncryptionInfoBox *)a;
 		break;
-	case GF_ISOM_BOX_TYPE_ADAF:
+	case GF_ISOM_BOX_TYPE_AKEY:
 		if (ptr->key_info) return GF_ISOM_INVALID_FILE;
 		ptr->key_info = (GF_AdobeKeyInfoBox *)a;
 		break;
@@ -1652,10 +1654,10 @@ GF_Err aprm_Write(GF_Box *s, GF_BitStream *bs)
 	if (!s) return GF_BAD_PARAM;
 	e = gf_isom_full_box_write(s, bs);
 	if (e) return e;
-	//ahdr
+	//aeib
 	e = gf_isom_box_write((GF_Box *) ptr->enc_info, bs);
 	if (e) return e;
-	//adaf
+	//akey
 	e = gf_isom_box_write((GF_Box *) ptr->key_info, bs);
 	if (e) return e;
 
@@ -1809,7 +1811,7 @@ GF_Err akey_Size(GF_Box *s)
 	if (e) return e;
 	ptr->size += ptr->params->size;
 	e = gf_isom_box_size((GF_Box *) ptr->params);
-	return GF_OK;
+	return e;
 }
 #endif //GPAC_DISABLE_ISOM_WRITE
 
