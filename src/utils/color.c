@@ -2233,7 +2233,7 @@ static GF_Err gf_color_write_yuv444_10_to_yuv_intrin(GF_VideoSurface *vs_dst, un
 			val1 = _mm_srli_epi32(val1, 16);
 			val2 = _mm_load_si128(src2);
 			val2 = _mm_srli_epi32(val2, 16);
-			val12 = _mm_packus_epi32(val1, val2);
+			val12 = _mm_packs_epi32(val1, val2); /*to verify*/
 			val12 = _mm_srli_epi16(val12, 2);
 
 			val3 = _mm_load_si128(src3);
@@ -2242,7 +2242,7 @@ static GF_Err gf_color_write_yuv444_10_to_yuv_intrin(GF_VideoSurface *vs_dst, un
 			val4 = _mm_load_si128(src4);
 		
 			val4 = _mm_srli_epi32(val4, 16);
-			val34 = _mm_packus_epi32(val3, val4);
+			val34 = _mm_packs_epi32(val3, val4); /*to verify*/
 			val34 = _mm_srli_epi16(val34, 2);
 
 			val_dst = _mm_packus_epi16(val12, val34);
@@ -2266,7 +2266,7 @@ static GF_Err gf_color_write_yuv444_10_to_yuv_intrin(GF_VideoSurface *vs_dst, un
 			val2 = _mm_load_si128(src2);
 			
 			val2 = _mm_srli_epi32(val2, 16);
-			val12 = _mm_packus_epi32(val1, val2);
+			val12 = _mm_packs_epi32(val1, val2); /*to verify*/
 			val12 = _mm_srli_epi16(val12, 2);
 
 			val3 = _mm_load_si128(src3);
@@ -2275,7 +2275,7 @@ static GF_Err gf_color_write_yuv444_10_to_yuv_intrin(GF_VideoSurface *vs_dst, un
 			val4 = _mm_load_si128(src4);
 			
 			val4 = _mm_srli_epi32(val4, 16);
-			val34 = _mm_packus_epi32(val3, val4);
+			val34 = _mm_packs_epi32(val3, val4); /*to verify*/
 			val34 = _mm_srli_epi16(val34, 2);
 
 			val_dst = _mm_packus_epi16(val12, val34);
