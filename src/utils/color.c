@@ -2572,7 +2572,7 @@ GF_Err gf_color_write_yuv422_10_to_yuv(GF_VideoSurface *vs_dst, unsigned char *p
 		&& (GFINTCAST(pU + src_stride / 2) % 8 == 0)
 		&& (GFINTCAST(pV + src_stride / 2) % 8 == 0)
 		) {
-		return gf_color_write_yuv422_10_to_yuv422_intrin(vs_dst, pY, pU, pV, src_stride, src_width, src_height, _src_wnd, swap_uv);
+		return gf_color_write_yuv422_10_to_yuv_intrin(vs_dst, pY, pU, pV, src_stride, src_width, src_height, _src_wnd, swap_uv);
 	}
 #endif
 	
@@ -2613,7 +2613,7 @@ GF_Err gf_color_write_yuv422_10_to_yuv(GF_VideoSurface *vs_dst, unsigned char *p
 		for (j = 0; j<w / 2; j++) {
 			*dst = (*src) >> 2;
 			dst++;
-			src+=2;
+			src++;
 		}
 	}
 
