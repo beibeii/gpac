@@ -62,19 +62,19 @@ GF_Err gf_rmdir(char *DirPathName)
 	res = RemoveDirectory(swzName);
 	if (! res) {
 		int err = GetLastError();
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Cannot delete director %s: last error %d\n", DirPathName, err ));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Cannot delete directory %s: last error %d\n", DirPathName, err ));
 	}
 #elif defined (WIN32)
 	int res = rmdir(DirPathName);
 	if (res==-1) {
 		int err = GetLastError();
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Cannot delete director %s: last error %d\n", DirPathName, err ));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Cannot delete directory %s: last error %d\n", DirPathName, err ));
 		return GF_IO_ERR;
 	}
 #else
 	int res = rmdir(DirPathName);
 	if (res==-1) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Cannot delete director %s: last error %d\n", DirPathName, errno  ));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Cannot delete directory %s: last error %d\n", DirPathName, errno  ));
 		return GF_IO_ERR;
 	}
 #endif
@@ -203,6 +203,11 @@ static char* gf_sanetize_single_quoted_string(const char *src) {
 }
 #endif
 
+#if defined(GPAC_IPHONE) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= 80000)
+#include <spawn.h>
+extern char **environ;
+#endif
+
 GF_EXPORT
 GF_Err gf_move_file(const char *fileName, const char *newFileName)
 {
@@ -223,7 +228,21 @@ GF_Err gf_move_file(const char *fileName, const char *newFileName)
 	arg1 = gf_sanetize_single_quoted_string(fileName);
 	arg2 = gf_sanetize_single_quoted_string(newFileName);
 	if (snprintf(cmd, sizeof cmd, "mv %s %s", arg1, arg2) >= sizeof cmd) goto error;
+
+#if defined(GPAC_IPHONE) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= 80000)
+	{
+		pid_t pid;
+		char *argv[3];
+		argv[0] = "mv";
+		argv[1] = cmd;
+		argv[2] = NULL;
+		posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
+		waitpid(pid, NULL, 0);
+	}
+#else
 	e = (system(cmd) == 0) ? GF_OK : GF_IO_ERR;
+#endif
+	
 error:
 	gf_free(arg1);
 	gf_free(arg2);
@@ -576,7 +595,7 @@ u64 gf_ftell(FILE *fp)
 {
 #if defined(_WIN32_WCE)
 	return (u64) ftell(fp);
-#elif defined(GPAC_CONFIG_WIN32)	/* mingw or cygwin */
+#elif defined(GPAC_CONFIG_WIN32) && !defined(__CYGWIN__)	/* mingw or cygwin */
 #if (_FILE_OFFSET_BITS >= 64)
 	return (u64) ftello64(fp);
 #else
@@ -598,7 +617,7 @@ u64 gf_fseek(FILE *fp, s64 offset, s32 whence)
 {
 #if defined(_WIN32_WCE)
 	return (u64) fseek(fp, (s32) offset, whence);
-#elif defined(GPAC_CONFIG_WIN32)	/* mingw or cygwin */
+#elif defined(GPAC_CONFIG_WIN32) && !defined(__CYGWIN__)	/* mingw or cygwin */
 #if (_FILE_OFFSET_BITS >= 64)
 	return (u64) fseeko64(fp, offset, whence);
 #else
