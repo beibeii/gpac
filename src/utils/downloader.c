@@ -32,14 +32,23 @@
 #include <gpac/tools.h>
 #include <gpac/cache.h>
 
+
 #ifndef GPAC_DISABLE_CORE_TOOLS
 
 #ifdef GPAC_HAS_SSL
+#define GPAC_HAS_HTTP2
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
+
+#ifdef GPAC_HAS_HTTP2
+#include <nghttp2/nghttp2.h>
+#include <poll.h>
+#include <fcntl.h>
+#endif // GPAC_HAS_HTTP2
+#define ARRLEN(x) (sizeof(x) / sizeof(x[0]))
 
 #if (defined(WIN32) || defined(_WIN32_WCE)) && !defined(__GNUC__)
 #pragma comment(lib, "ssleay32")
@@ -85,7 +94,18 @@ enum REQUEST_TYPE
 	HEAD = 1,
 	OTHER = 2
 };
+#ifdef GPAC_HAS_HTTP2
+enum { IO_NONE, WANT_READ, WANT_WRITE };
+typedef struct {
+	int32_t stream_id;
+} http2_stream_data;
 
+typedef struct {
+	nghttp2_session *session;
+	http2_stream_data *stream_data;
+	int want_io;
+} http2_session_data;
+#endif // GPAC_HAS_HTTP2
 /*!the structure used to store an HTTP header*/
 typedef struct
 {
@@ -108,7 +128,9 @@ struct __gf_download_session
 {
 	/*this is always 0 and helps differenciating downloads from other interfaces (interfaceType != 0)*/
 	u32 reserved;
-
+#ifdef GPAC_HAS_HTTP2
+	http2_session_data * session_data;
+#endif // GPAC_HAS_HTTP2
 	struct __gf_download_manager *dm;
 	GF_Thread *th;
 	GF_Mutex *mx;
@@ -126,6 +148,7 @@ struct __gf_download_session
 	char cookie[GF_MAX_PATH];
 	DownloadedCacheEntry cache_entry;
 	Bool reused_cache_entry, from_cache_only;
+	Bool ishttp2;
 
 	//mime type, only used when the session is not cached.
 	char *mime_type;
@@ -398,7 +421,328 @@ static Bool init_ssl_lib() {
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_NETWORK, ("[HTTPS] Initalization of SSL library complete.\n"));
 	return GF_FALSE;
 }
+#ifdef GPAC_HAS_HTTP2
+static void print_header(FILE *f, const uint8_t *name, size_t namelen,
+                         const uint8_t *value, size_t valuelen) {
+	fwrite(name, 1, namelen, f);
+	fprintf(f, ": ");
+	fwrite(value, 1, valuelen, f);
+	fprintf(f, "\n");
+}
 
+/* Print HTTP headers to |f|. Please note that this function does not
+   take into account that header name and value are sequence of
+   octets, therefore they may contain non-printable characters. */
+static void print_headers(FILE *f, nghttp2_nv *nva, size_t nvlen) {
+	size_t i;
+	for (i = 0; i < nvlen; ++i) {
+		print_header(f, nva[i].name, nva[i].namelen, nva[i].value, nva[i].valuelen);
+	}
+	fprintf(f, "\n");
+}
+static GF_Err wait_for_header_and_parse(GF_DownloadSession *sess, char * sHTTP);
+
+/* nghttp2_on_header_callback: Called when nghttp2 library emits
+   single header name/value pair. */
+static int on_header_callback(nghttp2_session *session ,
+                              const nghttp2_frame *frame, const uint8_t *name,
+                              size_t namelen, const uint8_t *value,
+                              size_t valuelen, uint8_t flags ,
+                              void *user_data) {
+	GF_DownloadSession * sess = (GF_DownloadSession *)user_data;
+	GF_HTTPHeader *hdrp= NULL;
+	GF_SAFEALLOC(hdrp, GF_HTTPHeader);
+	
+  switch (frame->hd.type) {
+  case NGHTTP2_HEADERS:
+    if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE &&
+        sess->session_data->stream_data->stream_id == frame->hd.stream_id) {
+      /* Print response headers for the initiated request. */
+      print_header(stderr, name, namelen, value, valuelen);
+	  if (hdrp) {
+		  hdrp->name = gf_strdup(name);
+		  hdrp->value = gf_strdup(value);
+		  gf_list_add(sess->headers, hdrp);
+	  }
+	
+      break;
+    }
+  }
+  return 0;
+}
+
+/* nghttp2_on_begin_headers_callback: Called when nghttp2 library gets
+   started to receive header block. */
+static int on_begin_headers_callback(nghttp2_session *session,
+                                     const nghttp2_frame *frame,
+                                     void *user_data) {
+  GF_DownloadSession * sess = (GF_DownloadSession *)user_data;
+  switch (frame->hd.type) {
+  case NGHTTP2_HEADERS:
+	 
+    if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE &&
+        sess->session_data->stream_data->stream_id == frame->hd.stream_id) {
+      fprintf(stderr, "Response headers for stream ID=%d:\n",
+              frame->hd.stream_id);
+    }
+    break;
+  }
+  return 0;
+}
+
+
+static GFINLINE void gf_dm_data_received(GF_DownloadSession *sess, u8 *payload, u32 payload_size, Bool store_in_init, u32 *rewrite_size);
+/* nghttp2_on_frame_recv_callback: Called when nghttp2 library
+   received a complete frame from the remote peer. */
+static int on_frame_recv_callback(nghttp2_session *session ,
+                                  const nghttp2_frame *frame, void *user_data) {
+	u32 read_size;
+ GF_DownloadSession * sess = (GF_DownloadSession *)user_data;
+ 
+ switch (frame->hd.type) {
+  case NGHTTP2_HEADERS:
+    if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE &&
+        sess->session_data->stream_data->stream_id == frame->hd.stream_id) {
+		/* we don't wait for header we just parsed it. This function was modified */
+		 wait_for_header_and_parse(sess,NULL);
+		 sess->status = GF_NETIO_HEADER_PARSED;
+		fprintf(stderr, "All headers received\n");
+    }
+	
+    break;
+  }
+  
+  return 0;
+}
+
+/* nghttp2_on_data_chunk_recv_callback: Called when DATA frame is
+   received from the remote peer. */
+static int on_data_chunk_recv_callback(nghttp2_session *session ,
+                                       uint8_t flags , int32_t stream_id,
+                                       const uint8_t *data, size_t len,
+                                       void *user_data) {
+  GF_DownloadSession * sess = (GF_DownloadSession *)user_data;
+  if (sess->session_data->stream_data->stream_id == stream_id) {
+	  u32 read_size;
+	  gf_dm_data_received(sess, (u8 *) data, len, GF_FALSE, &read_size);
+	  
+
+  }
+  return 0;
+}
+
+/* nghttp2_on_stream_close_callback: Called when a stream is about to
+   closed. This example program only deals with 1 HTTP request (1
+   stream), if it is closed, we send GOAWAY and tear down the
+   session */
+static int on_stream_close_callback(nghttp2_session *session, int32_t stream_id,
+                                    uint32_t error_code, void *user_data) {
+  GF_DownloadSession * sess = (GF_DownloadSession *)user_data;
+  int rv;
+	u32 read_size;
+  if (sess->session_data->stream_data->stream_id == stream_id) {
+    fprintf(stderr, "Stream %d closed with error_code=%d\n", stream_id,
+            error_code);
+	sess->status = GF_NETIO_DATA_EXCHANGE;
+	//sess->status = GF_NETIO_DISCONNECTED;
+	//gf_dm_data_received(sess, (u8 *) sess->mdata, sess->msize , GF_FALSE, &read_size);
+    rv = nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
+    if (rv != 0) {
+      return NGHTTP2_ERR_CALLBACK_FAILURE;
+    }
+  }
+  return 0;
+}
+static ssize_t send_callback(nghttp2_session *session , const uint8_t *data,
+                             size_t length, int flags , void *user_data) {
+	
+	int rv;
+	GF_DownloadSession * sess = (GF_DownloadSession *)user_data;
+	sess->session_data->want_io = IO_NONE;
+	
+	rv = SSL_write(sess->ssl, data, (int)length);
+	
+	if (rv <= 0) {
+		int err = SSL_get_error(sess->ssl, rv);
+		if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+			sess->session_data->want_io =
+				(err == SSL_ERROR_WANT_READ ? WANT_READ : WANT_WRITE);
+			rv = NGHTTP2_ERR_WOULDBLOCK;
+		} else {
+			rv = NGHTTP2_ERR_CALLBACK_FAILURE;
+		}
+	}
+	return rv;
+}
+static ssize_t recv_callback(nghttp2_session *session , uint8_t *buf,
+                             size_t length, int flags , void *user_data) {
+	
+	int rv;
+	GF_DownloadSession * sess = (GF_DownloadSession *)user_data;
+	sess->session_data->want_io = IO_NONE;
+	
+	if(!sess->ssl) return NGHTTP2_ERR_CALLBACK_FAILURE;
+	rv = SSL_read(sess->ssl, buf, (int)length);
+	if (rv < 0) {
+		int err = SSL_get_error(sess->ssl, rv);
+		if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+			sess->session_data->want_io =
+				(err == SSL_ERROR_WANT_READ ? WANT_READ : WANT_WRITE);
+			rv = NGHTTP2_ERR_WOULDBLOCK;
+		} else {
+			rv = NGHTTP2_ERR_CALLBACK_FAILURE;
+		}
+	} else if (rv == 0) {
+		rv = NGHTTP2_ERR_EOF;
+	}
+	return rv;
+}
+static void http2_exec_io(GF_DownloadSession * sess) {
+	int rv;
+	rv = nghttp2_session_recv(sess->session_data->session);
+	
+	if (rv != 0) {
+		return;
+	}
+	rv = nghttp2_session_send(sess->session_data->session);
+	
+	if (rv != 0) {
+		return;
+	}
+}
+static void initialize_nghttp2_session(GF_DownloadSession *sess) {
+	nghttp2_session_callbacks *callbacks;
+
+	nghttp2_session_callbacks_new(&callbacks);
+
+	nghttp2_session_callbacks_set_send_callback(callbacks, send_callback);
+	nghttp2_session_callbacks_set_recv_callback(callbacks, recv_callback);
+
+	nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks,
+			on_frame_recv_callback);
+
+	nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
+		callbacks, on_data_chunk_recv_callback);
+
+	nghttp2_session_callbacks_set_on_stream_close_callback(
+		callbacks, on_stream_close_callback);
+
+	nghttp2_session_callbacks_set_on_header_callback(callbacks,
+			on_header_callback);
+
+	nghttp2_session_callbacks_set_on_begin_headers_callback(
+		callbacks, on_begin_headers_callback);
+
+	nghttp2_session_client_new(&sess->session_data->session, callbacks, sess);
+
+	nghttp2_session_callbacks_del(callbacks);
+}
+/* NPN TLS extension client callback. We check that server advertised
+   the HTTP/2 protocol the nghttp2 library supports. If not, exit
+   the program. */
+static int select_next_proto_cb(SSL *ssl , unsigned char **out,
+                                unsigned char *outlen, const unsigned char *in,
+                                unsigned int inlen, void *arg) {
+	if (nghttp2_select_next_protocol(out, outlen, in, inlen) <= 0) {
+		fprintf(stderr, "Server did not advertise " NGHTTP2_PROTO_VERSION_ID);
+	}
+	return SSL_TLSEXT_ERR_OK;
+}
+static http2_session_data * create_http2_session_data() {
+	http2_session_data *session_data = malloc(sizeof(http2_session_data));
+
+	memset(session_data, 0, sizeof(http2_session_data));
+	
+	return session_data;
+}
+static http2_stream_data *create_http2_stream_data() {
+	
+	http2_stream_data *stream_data = malloc(sizeof(http2_stream_data));
+	return stream_data;
+}
+
+
+
+static void submit_settings(http2_session_data *session_data) {
+	nghttp2_settings_entry iv[1] = {
+	{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}};
+	int rv;
+
+	/* client 24 bytes magic string will be sent by nghttp2 library */
+	rv = nghttp2_submit_settings(session_data->session, NGHTTP2_FLAG_NONE, iv,
+								 ARRLEN(iv));
+	if (rv != 0) {
+		return;
+	}
+}
+
+#define MAKE_NV(NAME, VALUE, VALUELEN)                                         \
+{                                                                            \
+    (uint8_t *) NAME, (uint8_t *)VALUE, sizeof(NAME) - 1, VALUELEN,            \
+	NGHTTP2_NV_FLAG_NONE                                                   \
+}
+
+#define MAKE_NV2(NAME, VALUE)                                                  \
+{                                                                            \
+    (uint8_t *) NAME, (uint8_t *)VALUE, sizeof(NAME) - 1, sizeof(VALUE) - 1,   \
+	NGHTTP2_NV_FLAG_NONE                                                   \
+}
+
+/* Send HTTP request to the remote peer */
+static void submit_request(GF_DownloadSession *sess)  {
+	int32_t stream_id;
+	
+	char port[8];
+	snprintf(port, sizeof(port)-1, ":%d", sess->port);
+	char * hostport = (char *) gf_malloc((strlen(sess->server_name) + strlen(port) + 1) * sizeof(char) );
+	strncpy(hostport, sess->server_name, strlen(sess->server_name));
+	strncat(hostport,port, strlen(port));
+	nghttp2_nv hdrs[] = {
+		MAKE_NV2(":method", "GET"),
+		MAKE_NV(":scheme", "https", 5),
+		MAKE_NV(":authority", hostport, strlen(hostport)),
+	MAKE_NV(":path", sess->remote_path, strlen(sess->remote_path))};
+	fprintf(stderr, "Request headers:\n");
+	print_headers(stderr, hdrs, ARRLEN(hdrs));
+	stream_id = nghttp2_submit_request(sess->session_data->session, NULL, hdrs,
+									   ARRLEN(hdrs), NULL, sess);
+	if (stream_id < 0) {
+		return;
+	}
+
+	sess->session_data->stream_data->stream_id = stream_id;
+	gf_free(hostport);
+	hostport=NULL;
+}
+
+static void ctl_poll(struct pollfd *pollfd, GF_DownloadSession * sess) {
+	pollfd->events = 0;
+	if (nghttp2_session_want_read(sess->session_data->session) ||
+			sess->session_data->want_io == WANT_READ) {
+		pollfd->events |= POLLIN;
+		
+	}
+	if (nghttp2_session_want_write(sess->session_data->session) ||
+			sess->session_data->want_io == WANT_WRITE) {
+		pollfd->events |= POLLOUT;
+		
+	}
+	
+}
+static void make_non_block(int fd) {
+	int flags, rv;
+	while ((flags = fcntl(fd, F_GETFL, 0)) == -1 && errno == EINTR)
+		;
+	if (flags == -1) {
+		return;
+	}
+	while ((rv = fcntl(fd, F_SETFL, flags | O_NONBLOCK)) == -1 && errno == EINTR)
+		;
+	if (rv == -1) {
+		return;
+	}
+}
+#endif //GPAC_HAS_HTTP2
 static int ssl_init(GF_DownloadManager *dm, u32 mode)
 {
 #if OPENSSL_VERSION_NUMBER > 0x00909000
@@ -447,7 +791,15 @@ static int ssl_init(GF_DownloadManager *dm, u32 mode)
 	 ssl_check_certificate, which provides much better diagnostics
 	 than examining the error stack after a failed SSL_connect.  */
 	SSL_CTX_set_verify(dm->ssl_ctx, SSL_VERIFY_NONE, NULL);
+#ifdef GPAC_HAS_HTTP2	
+	SSL_CTX_set_options(dm->ssl_ctx, SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
+	SSL_CTX_set_next_proto_select_cb(dm->ssl_ctx, select_next_proto_cb, NULL);
 
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+	SSL_CTX_set_alpn_protos(ssl_ctx, (const unsigned char *)"\x02h2", 3);
+#endif // OPENSSL_VERSION_NUMBER >= 0x10002000L
+
+#endif //GPAC_HAS_HTTP2	
 	/* Since fd_write unconditionally assumes partial writes (and handles them correctly),
 	allow them in OpenSSL.  */
 	SSL_CTX_set_mode(dm->ssl_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
@@ -775,7 +1127,9 @@ void gf_dm_sess_del(GF_DownloadSession *sess)
 }
 
 void http_do_requests(GF_DownloadSession *sess);
-
+#ifdef GPAC_HAS_HTTP2
+void http2_do_requests(GF_DownloadSession *sess);
+#endif // GPAC_HAS_HTTP2
 static void gf_dm_sess_notify_state(GF_DownloadSession *sess, GF_NetIOStatus dnload_status, GF_Err error)
 {
 	if (sess->user_proc) {
@@ -1195,7 +1549,7 @@ GF_DownloadSession *gf_dm_sess_new(GF_DownloadManager *dm, const char *url, u32 
 static GF_Err gf_dm_read_data(GF_DownloadSession *sess, char *data, u32 data_size, u32 *out_read)
 {
 	GF_Err e;
-
+	
 	if (sess->dm && sess->dm->simulate_no_connection) {
 		if (sess->sock) {
 			sess->status = GF_NETIO_DISCONNECTED;
@@ -1222,13 +1576,14 @@ static GF_Err gf_dm_read_data(GF_DownloadSession *sess, char *data, u32 data_siz
 		else if (!size)
 			e = GF_IP_NETWORK_EMPTY;
 		else {
+			
 			e = GF_OK;
 			data[size] = 0;
 			*out_read = size;
 		}
 	} else
 #endif
-
+		
 		e = gf_sk_receive(sess->sock, data, data_size, 0, out_read);
 
 	gf_mx_v(sess->mx);
@@ -1284,8 +1639,11 @@ static void gf_dm_connect(GF_DownloadSession *sess)
 {
 	GF_Err e;
 	u16 proxy_port = 0;
-	const char *proxy, *ip;
-
+	const char *proxy, *ip; 
+#ifdef GPAC_HAS_HTTP2
+	const unsigned char *alpn = NULL;
+    unsigned int alpnlen = 0;
+#endif // GPAC_HAS_HTTP2	
 	if (!sess->sock) {
 		sess->num_retry = 40;
 		sess->sock = gf_sk_new(GF_SOCK_TYPE_TCP);
@@ -1405,10 +1763,29 @@ static void gf_dm_connect(GF_DownloadSession *sess)
 			SSL_set_fd(sess->ssl, gf_sk_get_handle(sess->sock));
 			SSL_set_connect_state(sess->ssl);
 			ret = SSL_connect(sess->ssl);
+#ifdef GPAC_HAS_HTTP2			
+			SSL_get0_next_proto_negotiated(sess->ssl, &alpn, &alpnlen);
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+			if (alpn == NULL) {
+				SSL_get0_alpn_selected(ssl, &alpn, &alpnlen);
+			}
+#endif // OPENSSL_VERSION_NUMBER >= 0x10002000L
+			if (alpn == NULL || alpnlen != 2 || memcmp("h2", alpn, 2) != 0) {
+				fprintf(stderr, "h2 is not negotiated\n");
+				
+			} else {
+			sess->session_data = create_http2_session_data();
+			sess->session_data->stream_data = create_http2_stream_data();
+			initialize_nghttp2_session(sess);
+			sess->do_requests = http2_do_requests;
+			sess->ishttp2 = GF_TRUE;
+			}
+#endif // GPAC_HAS_HTTP2
 			if (ret<=0) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_NETWORK, ("[SSL] Cannot connect, error %d\n", ret));
 			}
-
+			
+			
 			cert = SSL_get_peer_certificate(sess->ssl);
 			/*if we have a cert, check it*/
 			if (cert) {
@@ -2182,7 +2559,10 @@ static GFINLINE void gf_dm_data_received(GF_DownloadSession *sess, u8 *payload, 
 	}
 
 	if (sess->total_size && (sess->bytes_done == sess->total_size)) {
-		gf_dm_disconnect(sess, GF_FALSE);
+		if (!sess->ishttp2) {
+			gf_dm_disconnect(sess, GF_FALSE);
+		}
+
 		par.msg_type = GF_NETIO_DATA_TRANSFERED;
 		par.error = GF_OK;
 
@@ -2701,7 +3081,7 @@ static GF_Err http_parse_remaining_body(GF_DownloadSession * sess, char * sHTTP)
 			sess->remaining_data_size = 0;
 		}
 		sHTTP[size + remaining_data_size] = 0;
-
+		
 		gf_dm_data_received(sess, (u8 *) sHTTP, size + remaining_data_size, GF_FALSE, NULL);
 
 		/*socket empty*/
@@ -2757,7 +3137,7 @@ static GF_Err wait_for_header_and_parse(GF_DownloadSession *sess, char * sHTTP)
 	GF_Err e;
 	char * new_location;
 	const char * mime_type;
-	assert( sess->status == GF_NETIO_WAIT_FOR_REPLY );
+	//assert( sess->status == GF_NETIO_WAIT_FOR_REPLY );
 	bytesRead = res = 0;
 	new_location = NULL;
 	if (!(sess->flags & GF_NETIO_SESSION_NOT_CACHED)) {
@@ -2783,8 +3163,9 @@ static GF_Err wait_for_header_and_parse(GF_DownloadSession *sess, char * sHTTP)
 	//always set start time to the time at last attempt reply parsing
 	sess->start_time = gf_sys_clock_high_res();
 	sess->start_time_utc = gf_net_get_utc();
-
-	while (1) {
+	/* if the protocol is http2 we call this function when all the header is received, so we just use this function to parse it */
+	if (!sess->ishttp2) {
+		while (1) {
 		e = gf_dm_read_data(sess, sHTTP + bytesRead, buf_size - bytesRead, &res);
 		switch (e) {
 		case GF_IP_NETWORK_EMPTY:
@@ -2898,11 +3279,17 @@ static GF_Err wait_for_header_and_parse(GF_DownloadSession *sess, char * sHTTP)
 		if (hdr_sep) hdr_sep[0] = '\r';
 	}
 
+	}
 	//default pre-processing of headers - needs cleanup, not all of these have to be parsed before checking reply code
+	
 	for (i=0; i<gf_list_count(sess->headers); i++) {
 		char *val;
 		GF_HTTPHeader *hdrp = (GF_HTTPHeader*)gf_list_get(sess->headers, i);
-
+#ifdef GPAC_HAS_HTTP2		
+		if (!stricmp(hdrp->name, ":status") ) {
+			rsp_code = (u32) atoi(hdrp->value);
+		} else 
+#endif // GPAC_HAS_HTTP2
 		if (!stricmp(hdrp->name, "Content-Length") ) {
 			ContentLength = (u32) atoi(hdrp->value);
 
@@ -3366,6 +3753,70 @@ void http_do_requests(GF_DownloadSession *sess)
 	}
 }
 
+#ifdef GPAC_HAS_HTTP2
+/**
+ * Default performing behaviour
+ * \param sess The session
+ */
+void http2_do_requests(GF_DownloadSession *sess)
+{
+	char sHTTP[GF_DOWNLOAD_BUFFER_SIZE+1];
+	nfds_t npollfds = 1;
+	struct pollfd pollfds[1];
+	static int a =0;
+	u32 read_size;
+	sess->session_data->want_io = IO_NONE;
+	if (sess->reused_cache_entry) {
+		//main session is done downloading, notify - to do we should send progress events on this session also ...
+		if (!gf_cache_is_in_progress(sess->cache_entry)) {
+			GF_NETIO_Parameter par;
+			gf_dm_disconnect(sess, GF_FALSE);
+			sess->reused_cache_entry = GF_FALSE;
+			memset(&par, 0, sizeof(GF_NETIO_Parameter));
+			par.msg_type = GF_NETIO_DATA_TRANSFERED;
+			par.error = GF_OK;
+			gf_dm_sess_user_io(sess, &par);
+		}
+		return;
+	}
+	if(sess->status < GF_NETIO_CONNECTED) return;
+	pollfds[0].fd =  gf_sk_get_handle(sess->sock);
+	
+	if(sess->status == GF_NETIO_CONNECTED)
+	{	/* Here make file descriptor non-block */
+		make_non_block(pollfds[0].fd);
+		submit_settings(sess->session_data);
+		/* Submit the HTTP request to the outbound queue. */
+		submit_request(sess);
+	}
+	
+	ctl_poll(pollfds, sess);
+	/* Event loop */
+	while (nghttp2_session_want_read(sess->session_data->session) ||
+			nghttp2_session_want_write(sess->session_data->session)) {
+		if( sess->status == GF_NETIO_HEADER_PARSED)
+		{	/* to get mime type, we should exit from gf_dm_sess_process_headers */
+			sess->status = GF_NETIO_DATA_EXCHANGE;
+			/* continue procesing data in gf_dm_session_thread */
+			return;
+		}
+		int nfds = poll(pollfds, npollfds, -1);
+		if (nfds == -1) return;
+		if (pollfds[0].revents & (POLLIN | POLLOUT)) 
+			http2_exec_io(sess);
+		if ((pollfds[0].revents & POLLHUP) || (pollfds[0].revents & POLLERR)) return;
+			
+		
+		ctl_poll(pollfds, sess);
+	}
+	/* we have completed read and write */
+	if (sess->status == GF_NETIO_DATA_EXCHANGE){
+		nghttp2_session_del(sess->session_data->session);
+		gf_dm_disconnect(sess, GF_FALSE);
+	}
+	
+}
+#endif // GPAC_HAS_HTTP2
 
 /**
  * NET IO for MPD, we don't need this anymore since mime-type can be given by session
