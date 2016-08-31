@@ -152,6 +152,8 @@ typedef enum
 	GF_NETIO_DATA_EXCHANGE,
 	/*!all data has been transfered*/
 	GF_NETIO_DATA_TRANSFERED,
+	/*!signal that header is parsed*/
+	GF_NETIO_HEADER_PARSED,
 	/*!signal that the session has been deconnected*/
 	GF_NETIO_DISCONNECTED,
 	/*!downloader session failed (error code set) or done/destroyed (no error code)*/
