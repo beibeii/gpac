@@ -171,6 +171,7 @@ typedef struct __gf_mesh
 	u32 vbo;
 	u32 vbo_idx;
 	Bool vbo_dirty, vbo_dynamic;
+	Bool is_updated;
 } GF_Mesh;
 
 GF_Mesh *new_mesh();
